@@ -5,11 +5,13 @@ import Downloads
 
 include("parser.jl")
 
-function parse_matpower_pglib(
+global SILENCED = false;
+
+function parse_pglib(
     ::Type{T},
     dataset :: String,
     datadir :: String;
-    named_tuple=false
+    out_type=Data{T}
 ) :: Union{Data{T}, NamedTuple} where T <: Real
     mkpath(datadir)
     data_path = joinpath(datadir, dataset)
@@ -21,34 +23,48 @@ function parse_matpower_pglib(
             data_path,
         )
     end
-    parse_matpower_file(T, fname; datadir, named_tuple)
+    parse_file(T, fname; datadir, out_type)
 end
 
-function parse_matpower_file(
+function parse_file(
     ::Type{T},
     fname :: String;
     datadir=nothing,
-    named_tuple=false
+    out_type=Data{T}
 ) :: Union{Data{T}, NamedTuple} where T <: Real
+    if out_type != Data && out_type != NamedTuple
+        @error "Argument out_type must have value NamedTuple | PowerParser.Data"
+    end
     _, f = splitdir(fname)
     name, _ = splitext(f)
     cached_path = nothing
-    isnothing(datadir) || cached_path = joinpath(datadir, name * ".jld2")
+    named_tuple = out_type != Data{T}
+    if isnothing(datadir)
+        cached_path = joinpath(datadir, name * "_ " * string(T) * ".jld2")
+    elseif !isdir(datadir)
+        mkdir(datadir)
+    end
 
     if !isnothing(cached_path) && isfile(cached_path)
-        @info "Loading cached JLD2 file at " * cached_path
+        SILENCED || @info "Loading cached JLD2 file at " * cached_path
         data = JLD2.load(cached_path)["data"]
         return named_tuple ? struct_to_nt(data) : data
     else
-        @info "Loading MATPOWER file"
+        SILENCED || @info "Loading MATPOWER file at " * fname
         data = process_ac_power_data(T, fname)
         if !isnothing(cached_path)
-            @info "Caching parsed matpower file to "
+            SILENCED || @info "Caching parsed matpower file to " * cached_path
             JLD2.save(cached_path, "data", data)
         end
         return named_tuple ? struct_to_nt(data) : data
     end
 end
 
+function silence()
+    @info "PowerParser.jl has been silenced for the rest of the session."
+    global SILENCED = true
+end
+
+export parse_file, parse_pglib, Data, BusData, BranchData, StorageData, GenData
 
 end # module PowerParser

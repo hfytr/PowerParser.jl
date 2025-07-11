@@ -4,9 +4,21 @@ authors = ["Archim Jhunjhunwala <archimj@mit.edu>"]
 version = "0.1.0"
 
 [deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 
 [compat]
-Downloads = "1.6.0"
-JLD2 = "0.5.15"
+BenchmarkTools = "~1.6"
+Downloads = "~1.6"
+JLD2 = "~0.5"
+PowerModels = "~0.21"
+Test = "~1.11"
+
+[extras]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+PowerModels = "c36e90e8-916a-50a6-bd94-075b64ef4655"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test", "PowerModels", "BenchmarkTools"]

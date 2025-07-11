@@ -1,6 +1,3 @@
-convert_data(data::N, backend) where {names,N<:NamedTuple{names}} =
-    NamedTuple{names}(convert_array(d, backend) for d in data)
-
 # FOR CONVENIENCE, the MATPOWER file spec
 # https://matpower.app/manual/matpower/DataFileFormat.html
 
@@ -11,11 +8,11 @@ struct BusData{T <: Real}
     qd :: T
     gs :: T
     bs :: T
-    area :: T
-    Vm :: T
-    Va :: T
+    area :: Int
+    vm :: T
+    va :: T
     baseKV :: T
-    zone :: T
+    zone :: Int
     vmax :: T
     vmin :: T
 end
@@ -25,15 +22,15 @@ struct BranchData{T <: Real}
     r :: T
     x :: T
     b :: T
-    ratea ::Int
-    rateb :: Int
-    ratec :: Int
+    ratea ::T
+    rateb :: T
+    ratec :: T
     ratio :: T
     angle :: T
     status :: Int
     angmin :: T
     angmax :: T
-    ratea_sq :: Int
+    ratea_sq :: T
     c1 :: T
     c2 :: T
     c3 :: T
@@ -69,25 +66,27 @@ struct GenData{T <: Real}
     qmax :: T
     qmin :: T
     vg :: T
-    mBase :: T
+    mbase :: T
     status :: Int
     pmax :: T
     pmin :: T
-    startup :: Union{T, Nothing}
-    shutdown :: Union{T, Nothing}
-    n :: Union{Int, Nothing}
-    c :: Union{NTuple{3, T}, Nothing}
     i :: Int
+    # making these unions is better code, but then GenData.c is not bits
+    model_poly :: Bool
+    startup :: T
+    shutdown :: T
+    n :: Int
+    c :: NTuple{3, T}
 end
 
 struct Data{T <: Real}
     version :: String
-    baseMVA :: Float64
+    baseMVA :: T
     bus :: Vector{BusData{T}}
     gen :: Vector{GenData{T}}
     branch :: Vector{BranchData{T}}
     storage :: Vector{StorageData{T}}
-    ratea :: Vector{Int}
+    ratea :: Vector{T}
     arc :: Vector{Tuple{Int, Int, Int}}
     ref_buses :: Vector{Int}
 end
@@ -102,12 +101,12 @@ MATPOWER_VAR_TYPES = [
     (name = "storage", type = StorageData);
 ]
 
-function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: Real
+function parse_matpower(::Type{T}, fname :: String) :: Data{T} where T <: Real
     lines = split(read(open(fname), String), "\n")
     in_array = false
     cur_key = ""
     version = ""
-    baseMVA = 0
+    baseMVA = T(0.0)
     bus :: Vector{BusData{T}} = []
     gen :: Vector{GenData{T}} = []
     branch :: Vector{BranchData{T}} = []
@@ -139,39 +138,47 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                     push!(bus, BusData(
                         round(Int, items[col_inds["bus_i"]]),
                         round(Int, items[col_inds["type"]]),
-                        items[col_inds["Pd"]],
-                        items[col_inds["Qd"]],
+                        items[col_inds["Pd"]] / baseMVA,
+                        items[col_inds["Qd"]] / baseMVA,
                         items[col_inds["Gs"]],
                         items[col_inds["Bs"]],
-                        items[col_inds["area"]],
+                        round(Int, items[col_inds["area"]]),
                         items[col_inds["Vm"]],
                         items[col_inds["Va"]],
                         items[col_inds["baseKV"]],
-                        items[col_inds["zone"]],
+                        round(Int, items[col_inds["zone"]]),
                         items[col_inds["Vmax"]],
                         items[col_inds["Vmin"]],
                     ))
                 elseif cur_key == "gen"
+                    mbase = items[col_inds["mBase"]]
                     push!(gen, GenData(
                         round(Int, items[col_inds["bus"]]),
-                        items[col_inds["Pg"]],
-                        items[col_inds["Qg"]],
-                        items[col_inds["Qmax"]],
-                        items[col_inds["Qmin"]],
+                        items[col_inds["Pg"]] / mbase,
+                        items[col_inds["Qg"]] / mbase,
+                        items[col_inds["Qmax"]] / mbase,
+                        items[col_inds["Qmin"]] / mbase,
                         items[col_inds["Vg"]],
-                        items[col_inds["mBase"]],
+                        mbase,
                         round(Int, items[col_inds["status"]]),
-                        items[col_inds["Pmax"]],
-                        items[col_inds["Pmin"]],
-                        nothing,
-                        nothing,
-                        nothing,
-                        nothing,
+                        items[col_inds["Pmax"]] / mbase,
+                        items[col_inds["Pmin"]] / mbase,
                         row_num,
+                        false,
+                        T(0),
+                        T(0),
+                        0,
+                        (T(0), T(0), T(0)),
                     ))
                 elseif cur_key == "gencost"
                     first_cost_col = col_inds["n"] + 1
-                    print(col_inds)
+                    # pglib puts the column name as "2" for some reason, so we cant use col_inds
+                    model_poly = items[1] == 2
+                    n = round(Int, items[col_inds["n"]])
+                    function normalize_cost(v :: Tuple{Int, T})
+                        i, c = v
+                        return model_poly ? baseMVA ^ (n-i) * c : c
+                    end
                     gen[row_num] = GenData(
                         round(Int, gen[row_num].bus),
                         gen[row_num].pg,
@@ -179,18 +186,19 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                         gen[row_num].qmax,
                         gen[row_num].qmin,
                         gen[row_num].vg,
-                        gen[row_num].mBase,
+                        gen[row_num].mbase,
                         gen[row_num].status,
                         gen[row_num].pmax,
                         gen[row_num].pmin,
+                        row_num,
+                        model_poly,
                         items[col_inds["startup"]],
                         items[col_inds["shutdown"]],
-                        round(Int, items[col_inds["n"]]),
-                        Tuple(items[first_cost_col:first_cost_col+2]),
-                        row_num,
+                        n,
+                        Tuple(map(normalize_cost, enumerate(items[first_cost_col:first_cost_col+2]))),
                     )
                 elseif cur_key == "branch"
-                    ratea_i = round(Int, items[col_inds["rateA"]])
+                    ratea_i = items[col_inds["rateA"]] / baseMVA
                     r = items[col_inds["r"]]
                     xraw = items[col_inds["x"]]
                     braw = items[col_inds["b"]]
@@ -216,7 +224,7 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                     ## branch.c7 = (g + g_to)
                     ## branch.c8 = (b + b_to)
                     # g_fr, g_to, b_fr, b_to are all not in pglib
-                    b_fr :: T = braw / 2.0
+                    b_fr :: T = braw / T(2.0)
                     b_to :: T = b_fr
                     push!(branch, BranchData(
                         round(Int, items[col_inds["fbus"]]),
@@ -225,13 +233,13 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                         xraw,
                         braw,
                         ratea_i,
-                        round(Int, items[col_inds["rateB"]]),
-                        round(Int, items[col_inds["rateC"]]),
+                        items[col_inds["rateB"]] / baseMVA,
+                        items[col_inds["rateC"]] / baseMVA,
                         items[col_inds["ratio"]],
                         items[col_inds["angle"]],
                         round(Int, items[col_inds["status"]]),
-                        items[col_inds["angmin"]],
-                        items[col_inds["angmax"]],
+                        items[col_inds["angmin"]] / T(180.0) * T(pi),
+                        items[col_inds["angmax"]] / T(180.0) * T(pi),
                         ratea_i ^ 2,
                         -g,
                         -b,
@@ -262,7 +270,6 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                         items[col_inds["q_loss"]],
                         items[col_inds["status"]],
                     ))
-                    set_fields!(storage[row_num], items, 1)
                 end
                 row_num += 1
             end
@@ -273,7 +280,6 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
             for (i, column) in enumerate(columns)
                 merge!(col_inds, Dict(column => i))
             end
-            print(col_inds)
             cur_key = ""
             type = Any
 
@@ -294,7 +300,7 @@ function parse_matpower_file(::Type{T}, fname :: String) :: Data{T} where T <: R
                 raw_data = words[length(words)-1]
                 version = String(raw_data[2:length(raw_data)-1])
             elseif cur_key == "baseMVA"
-                baseMVA = parse(Float64, words[length(words)-1])
+                baseMVA = parse(T, words[length(words)-1])
             else
                 in_array = true
                 row_num = 1
@@ -352,15 +358,15 @@ function standardize_cost_terms!(data :: Data{T}, order) where T <: Real
             data.gen[i].qmax,
             data.gen[i].qmin,
             data.gen[i].vg,
-            data.gen[i].mBase,
+            data.gen[i].mbase,
             data.gen[i].status,
             data.gen[i].pmax,
             data.gen[i].pmin,
+            data.gen[i].i,
             data.gen[i].startup,
             data.gen[i].shutdown,
             n,
             c,
-            data.gen[i].i
         )
     end
 end
@@ -370,8 +376,8 @@ function calc_thermal_limits!(data :: Data{T}) where T <: Real
         xi = inv(branch.r + im * branch.x)
         y_mag = abs.(ifelse(isfinite(xi), xi, zero(xi)))
 
-        fr_vmax = data.bus[branch.fbus].Vmax
-        to_vmax = data.bus[branch.tbus].Vmax
+        fr_vmax = data.bus[branch.fbus].vmax
+        to_vmax = data.bus[branch.tbus].vmax
         m_vmax = max(fr_vmax, to_vmax)
 
         theta_max = max(abs(branch.angmin), abs(branch.angmax))
@@ -382,20 +388,27 @@ function calc_thermal_limits!(data :: Data{T}) where T <: Real
 end
 
 function process_ac_power_data(::Type{T}, filename) :: Data{T} where T <: Real
-    data = parse_matpower_file(T, filename)
+    data = parse_matpower(T, filename)
     standardize_cost_terms!(data, 2)
     calc_thermal_limits!(data)
     return data
 end
 
-function struct_to_nt(data :: T) :: NamedTuple where T <: DataType
-    result = ()
+should_recurse(fields) :: Bool =
+    all(typeof(field) == Symbol for field in fields) && !isempty(fields)
+function struct_to_nt(data :: T) :: NamedTuple where {T}
+    result = NamedTuple()
     for field in fieldnames(T)
-        field_val = getfield(field, data)
-        if field_val <: DataType
-            field_val = struct_to_nt(field_val)
+        val = getfield(data, field)
+        next_fields = fieldnames(typeof(val))
+        if typeof(val) <: Vector
+            if !isempty(val) && should_recurse(fieldnames(typeof(val[1])))
+                val = map(struct_to_nt, val)
+            end
+        elseif should_recurse(next_fields)
+            val = struct_to_nt(val)
         end
-        result = merge((field = field_val), result)
+        result = merge(result, (;field => val))
     end
     return result
 end
