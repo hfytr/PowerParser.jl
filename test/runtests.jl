@@ -80,32 +80,11 @@ ROW_TYPES = [
     BusData{Float64},
     GenData{Float64},
     BranchData{Float64},
-    StorageData{Float64}
+    StorageData{Float64},
 ]
 
 @testset "PowerParser isbits tests" begin
     for row_type in ROW_TYPES
         @assert(isbitstype(row_type), string(row_type) * " is not bits")
     end
-end
-
-function run_pm(dataset :: String)
-    path = joinpath("../data/", dataset)
-    pm_output = PowerModels.parse_file(path)
-    PowerModels.standardize_cost_terms!(pm_output, order = 2)
-    PowerModels.calc_thermal_limits!(pm_output)
-end
-
-datadir = "../data/"
-BENCH_CASES = [
-     (Float16, "pglib_opf_case10000_goc.m"),
-     (Float32, "pglib_opf_case10192_epigrids.m"),
-     (Float64, "pglib_opf_case20758_epigrids.m"),
-]
-@info "STARTING BENCHMARKS"
-for (type, dataset) in BENCH_CASES
-    @info "PowerParser.jl " * dataset
-    @btime PowerParser.parse_pglib($type, $dataset, $datadir; out_type=NamedTuple) samples=10
-    @info "PowerModels.jl " * dataset
-    @btime run_pm($dataset) samples=10
 end

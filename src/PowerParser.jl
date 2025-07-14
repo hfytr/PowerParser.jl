@@ -1,7 +1,7 @@
 module PowerParser
 
 import JLD2
-import Downloads
+import PGLib
 
 include("parser.jl")
 
@@ -9,21 +9,20 @@ global SILENCED = false;
 
 function parse_pglib(
     ::Type{T},
-    dataset :: String,
+    dataset_query :: String,
     datadir :: String;
     out_type=Data{T}
 ) :: Union{Data{T}, NamedTuple} where T <: Real
     mkpath(datadir)
-    data_path = joinpath(datadir, dataset)
-    fname = if isfile(data_path)
-        data_path
+    pglib_matches = PGLib.find_pglib_case(dataset_query)
+    dataset = if length(pglib_matches) == 0
+        throw(error("No matches found for pglib dataset: $dataset_query"))
+    elseif length(pglib_matches) > 1
+        throw(error("Ambiguity when specifying dataset $dataset_query. Possible matches: $pglib_matches"))
     else
-        Downloads.download(
-            "https://raw.githubusercontent.com/power-grid-lib/pglib-opf/master/$dataset",
-            data_path,
-        )
+        pglib_matches[1]
     end
-    parse_file(T, fname; datadir, out_type)
+    parse_file(T, joinpath(PGLib.PGLib_opf, dataset); datadir, out_type)
 end
 
 function parse_file(
